@@ -1,5 +1,5 @@
 Name:                text-register-machine
-Version:             0.2.0
+Version:             0.3.0
 Synopsis:            A Haskell implementation of the 1# Text Register Machine
 Description:         An implementation of Lawrence S. Moss' @1\#@ language and Text Register Machine (<http://www.indiana.edu/~iulg/trm/>). 
 Homepage:            https://github.com/acfoltzer/text-register-machine
@@ -17,8 +17,11 @@ source-repository head
   location: git://github.com/acfoltzer/text-register-machine.git
 
 Library
-  Exposed-modules:   Language.TRM
+  Exposed-modules:   Language.TRM,
+                     Language.TRM.Base,
+                     Language.TRM.Programs
   Build-depends:     base       == 4.*,
                      containers == 0.4.*,
                      mtl        == 2.0.*,
                      vector     == 0.9.*
+  Extensions:        OverloadedStrings
