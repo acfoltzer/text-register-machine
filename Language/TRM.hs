@@ -5,6 +5,7 @@
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
+{-# OPTIONS_GHC -Wall #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 
 -- | An implementation of Lawrence S. Moss' @1\#@ language and Text
@@ -42,15 +43,21 @@ module Language.TRM (
     -- ** Concrete Syntax and Semantics
   , LSymantics (..)
   , LComp (..)
-  , freshLabelHere
   , compileL
   , runL
+    -- ** Useful helpers
+  , do_
+  , freshLabelHere
     -- * Examples
     -- * Backwards-Binary Notation
   , encodeBB
   , decodeBB
+  , clear
+  , move
+  , copy
   , succBB
-  , plusBB
+  , succBB'
+  , plusBB'
 ) where
 
 import Control.Applicative
@@ -59,9 +66,9 @@ import "mtl" Control.Monad.State
 import "mtl" Control.Monad.Writer
 
 import Data.Char (isSpace)
-import Data.List hiding ((++))
+import Data.List hiding ((++), break)
 import Data.Maybe
-import Data.Monoid
+import Data.Monoid ()
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -71,14 +78,14 @@ import qualified Data.Vector as Vector
 
 import GHC.Exts hiding (Word)
 
-import Prelude hiding ((++))
+import Prelude hiding ((++), break)
 
 import Text.Printf
 
 (++) :: Monoid a => a -> a -> a
 (++) = mappend
 
----------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Basic 1# parser and machine
 
 -- | Typed representation of the @1#@ letters.
@@ -113,7 +120,7 @@ instance Show Word where
   show = show . wordToString
 
 -- | Register identifiers.
-newtype Register = R Int deriving (Eq, Ord, Show)
+newtype Register = R Int deriving (Eq, Ord, Show, Enum, Real, Integral, Num)
 
 -- | Abstract syntax for the primitive @1#@ instructions.
 data Instruction = SnocOne  Register
@@ -205,6 +212,12 @@ run p rs = regs $ final
   where Left final = loop M { program = p, pc = 0, regs = rs }
         loop mach = step mach >>= loop
 
+checkState :: Map Register Word -> Maybe ()
+checkState regs = do
+  _ <- Map.lookup 1 regs
+  let regs' = Map.delete 1 regs
+  guard $ all (W [] ==) (Map.elems regs')
+
 -- | Wrapper around 'run' that parses the given 'Word' into a
 -- 'Program', and then runs it in the given register state. Returns
 -- the value in register 1 once the program halts.
@@ -216,13 +229,9 @@ phi :: Word -> [(Register, Word)] -> Maybe Word
 phi p rs = do p' <- parseProgram p
               let final = run p' $ Map.fromList rs
               checkState final
-              Map.lookup (R 1) $! final
-  where checkState regs = do
-          _ <- Map.lookup (R 1) regs
-          let regs' = Map.delete (R 1) regs
-          guard $ all (W [] ==) (Map.elems regs')
+              Map.lookup 1 $! final
 
----------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- 1#L: Labels and Gotos instead of Forward and Backward
 
 -- | Label representation.
@@ -254,8 +263,8 @@ exposeLabels p = Vector.ifoldl' exposeLabel Map.empty p
         exposeLabel labs pos (Backward rel) 
           | pos - rel <= end && pos - rel >= 0
           = Map.insertWith (\_ lab -> lab) (pos-rel) (fresh labs) labs
-        exposeLabel _ _ (Forward rel)  = error "forward jump out of range"
-        exposeLabel _ _ (Backward rel) = error "backward jump out of range"
+        exposeLabel _ _ (Forward  _) = error "forward jump out of range"
+        exposeLabel _ _ (Backward _) = error "backward jump out of range"
         exposeLabel labs _ _ = labs
 
 -- | Convert a @1\#@ 'Program' into a semantically-equivalent @1\#L@
@@ -271,27 +280,27 @@ toLabeledProgram p = Vector.concat (insertLabels 0)
         substLabel _   (Case      r) = LCase     r
         substLabel pos (Forward rel) =
             case Map.lookup (pos+rel) labels of
-              Just label -> LGoto label
+              Just lab -> LGoto lab
               Nothing -> error "couldn't find label for position"
         substLabel pos (Backward rel) =
             case Map.lookup (pos-rel) labels of
-              Just label -> LGoto label
+              Just lab -> LGoto lab
               Nothing -> error "couldn't find label for position"
         insertLabels i | i == Vector.length p' = 
           case Map.lookup i labels of
             Nothing -> []
-            Just label -> [Vector.singleton $ LLabel label]
+            Just lab -> [Vector.singleton $ LLabel lab]
         insertLabels i = 
           case Map.lookup i labels of
-            Nothing -> (Vector.singleton $ p' Vector.! i) : insertLabels (i+1)
-            Just label -> (Vector.fromList $ [LLabel label, p' Vector.! i])
+            Nothing  -> (Vector.singleton $ p' Vector.! i) : insertLabels (i+1)
+            Just lab -> (Vector.fromList $ [LLabel lab, p' Vector.! i])
                         : insertLabels (i+1)
 
 exposePositions :: LProgram -> Map Label Int
 exposePositions lp = fst $ Vector.ifoldl' exposePosition (Map.empty, 0) lp
-  where exposePosition (poss, seen) pos (LLabel label) =
-          ( Map.insertWith (error $ "duplicate label " ++ show label) 
-                           label (pos-seen) poss
+  where exposePosition (poss, seen) pos (LLabel lab) =
+          ( Map.insertWith (error $ "duplicate label " ++ show lab) 
+                           lab (pos-seen) poss
           , seen+1 )
         exposePosition p _ _ = p
 
@@ -311,9 +320,9 @@ fromLabeledProgram lp = insertJumps . removeLabels $ lp
         insertJump _   (LSnocOne  r) = SnocOne  r
         insertJump _   (LSnocHash r) = SnocHash r
         insertJump _   (LCase     r) = Case     r
-        insertJump pos (LGoto label) = 
-          case Map.lookup label poss of
-            Nothing -> error $ "unbound label " ++ show label
+        insertJump pos (LGoto   lab) = 
+          case Map.lookup lab poss of
+            Nothing -> error $ "unbound label " ++ show lab
             Just dest | dest > pos -> Forward  (dest - pos)
                       | dest < pos -> Backward (pos - dest)
                       | otherwise -> error "can't jump to self"
@@ -382,10 +391,12 @@ compileL prog = execWriter (evalStateT (unLC prog) (0, Set.empty))
 -- runs it in the given register state. May return 'Nothing' if the
 -- program does not halt cleanly, as with 'run'.
 runL :: LComp () -> [(Register, Word)] -> Maybe Word
-runL p rs = 
-  Map.lookup (R 1) $ (run . fromLabeledProgram . compileL $ p) (Map.fromList rs)
+runL p rs = do 
+  let final = (run . fromLabeledProgram . compileL $ p) (Map.fromList rs)
+  checkState final
+  Map.lookup 1 final
 
----------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Backwards binary encoding
 
 -- | Encodes an 'Integral' type into a 'Word' of backwards-binary
@@ -404,28 +415,80 @@ encodeBB x | toInteger x == 0 = W [Hash]
 -- type. Fails with an error if the 'Word' is empty.
 decodeBB :: Num a => Word -> a
 decodeBB (W []) = error "Backwards-binary words cannot be empty"
-decodeBB (W xs) = fromInteger $ dec xs
+decodeBB (W ys) = fromInteger $ dec ys
   where dec []        = 0
         dec (Hash:xs) = 2 * dec xs
         dec (One:xs)  = 1 + (2 * dec xs)
 
----------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 -- Examples
 
 -- | Yields the successor of the backwards-binary number in register 1.
 --
--- > *Language.TRM> decodeBB <$> phi succBB [(R 1, encodeBB 0)]
+-- > *Language.TRM> decodeBB <$> phi succBB [(1, encodeBB 0)]
 -- > Just 1
--- > *Language.TRM> decodeBB <$> phi succBB [(R 1, encodeBB 119)]
+-- > *Language.TRM> decodeBB <$> phi succBB [(1, encodeBB 119)]
 -- > Just 120
-succBB :: Word
-succBB = "1##### 1111111111 111### 1111111111### 11# 1##### 111111### 111### 11## 1111#### 11# 111111#### 1111### 11## 1111111111 111#### 11# 11##### 111111### 111### 1## 1111#### 1# 111111####"
+succBB' :: Word
+succBB' = "1##### 1111111111 111### 1111111111### 11# 1##### 111111### 111### 11## 1111#### 11# 111111#### 1111### 11## 1111111111 111#### 11# 11##### 111111### 111### 1## 1111#### 1# 111111####"
+
+-- | A combinator to cleanly implement looping structures in 'LComp' code.
+-- 
+-- Takes a function that expects two arguments, @continue@ and
+-- @break@. The body of the function is a block of 'LComp' code that
+-- gets repeated whenever @continue@ is run. If @break@ is run,
+-- control jumps to the instruction after the call to 'do_'.
+do_ :: (LComp () -> LComp () -> LComp ()) -> LComp ()
+do_ f = do
+  break    <- freshLabel
+  continue <- freshLabelHere
+  f (goto continue) (goto break)
+  label break
+
+clear :: Register -- ^ 'Register' to clear.
+      -> LComp ()
+clear r = 
+  do_ $ \continue break -> 
+      cond r break continue continue
+
+move :: Register -- ^ Source 'Register'.
+     -> Register -- ^ Destination 'Register'.
+     -> LComp ()
+move src dest = 
+  do_ $ \continue break -> 
+    cond src 
+         break
+         (snocOne  dest >> continue)
+         (snocHash dest >> continue)
+
+copy :: Register -- ^ Source 'Register'.
+     -> Register -- ^ Destination 'Register'.
+     -> Register -- ^ Temporary 'Register'.
+     -> LComp ()
+copy src dest tmp = do
+  do_ $ \continue break ->
+    cond src
+         break
+         (do snocOne  dest ; snocOne  tmp ; continue)
+         (do snocHash dest ; snocHash tmp ; continue)
+  move tmp src
+
+succBB :: Register -- ^ 'Register' to increment.
+       -> Register -- ^ Temporary 'Register', assumed to be empty.
+       -> LComp ()
+succBB r tmp = do
+  do_ $ \continue break ->
+    cond r
+         break
+         (do snocHash tmp ; continue)
+         (do snocOne  tmp ; move r tmp ; break)
+  move tmp r
 
 -- | Yields the sum of two backwards-binary numbers in registers 1 and 2.
 --
--- > *Language.TRM> decodeBB <$> phi plusBB [(R 1, encodeBB 2), (R 2, encodeBB 3)]
+-- > *Language.TRM> decodeBB <$> phi plusBB [(1, encodeBB 2), (2, encodeBB 3)]
 -- > Just 5
--- > *Language.TRM> decodeBB <$> phi plusBB [(R 1, encodeBB 100), (R 2, encodeBB 20)]
+-- > *Language.TRM> decodeBB <$> phi plusBB [(1, encodeBB 100), (2, encodeBB 20)]
 -- > Just 120
-plusBB :: Word
-plusBB = "1##### 111### 111111### 111111111### 11##### 1111111111 11111111111 11111111111 111### 1111111111 11111111111 11111### 1111111111 11111111111 111111### 11##### 1111111111 11111111111 11### 1111111111 11111111111 1111111### 1111111111 11111111111### 11##### 1111111111 11111111111### 1111111111 11111111### 1111111111 111111111### 1##### 111### 111111### 111111111### 11##### 1111111111 1### 1111111111 111111### 111111111### 11##### 1111111111 111### 1111111111### 1111111111 1### 11##### 111### 11111111### 1### 111# 1111111111 11111111111 11111111111 1#### 111## 1111111111 11111111111 11111111111 111#### 111# 1111111111 11111111111#### 111## 1111111111 11111111111 11#### 1### 111##### 111111### 111### 1## 1111#### 1# 111111####"
+plusBB' :: Word
+plusBB' = "1##### 111### 111111### 111111111### 11##### 1111111111 11111111111 11111111111 111### 1111111111 11111111111 11111### 1111111111 11111111111 111111### 11##### 1111111111 11111111111 11### 1111111111 11111111111 1111111### 1111111111 11111111111### 11##### 1111111111 11111111111### 1111111111 11111111### 1111111111 111111111### 1##### 111### 111111### 111111111### 11##### 1111111111 1### 1111111111 111111### 111111111### 11##### 1111111111 111### 1111111111### 1111111111 1### 11##### 111### 11111111### 1### 111# 1111111111 11111111111 11111111111 1#### 111## 1111111111 11111111111 11111111111 111#### 111# 1111111111 11111111111#### 111## 1111111111 11111111111 11#### 1### 111##### 111111### 111### 1## 1111#### 1# 111111####"

@@ -1,5 +1,5 @@
 Name:                text-register-machine
-Version:             0.1.0
+Version:             0.2.0
 Synopsis:            A Haskell implementation of the 1# Text Register Machine
 Description:         An implementation of Lawrence S. Moss' @1\#@ language and Text Register Machine (<http://www.indiana.edu/~iulg/trm/>). 
 Homepage:            https://github.com/acfoltzer/text-register-machine
