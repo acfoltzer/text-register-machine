@@ -76,10 +76,6 @@ import Prelude hiding ((++), break, compare)
 
 import Text.Printf
 
-import qualified Debug.Trace as DT
-
-dbg = True
-
 (++) :: Monoid a => a -> a -> a
 (++) = mappend
 
@@ -192,9 +188,6 @@ step :: Machine -> Either Machine Machine
 step mach@M { program, pc } 
   | pc < 0 || pc >= Vector.length program = Left mach
 step mach@M { program, pc, regs } =
-  (if dbg then DT.trace (printf "\t[%s]\n%s" (show $ program Vector.! pc)
-                                            (show regs))
-   () else ()) `seq`
   case program Vector.! pc of
     SnocOne  r -> return $ mach { pc = pc+1, regs = snocReg r One  regs }
     SnocHash r -> return $ mach { pc = pc+1, regs = snocReg r Hash regs }

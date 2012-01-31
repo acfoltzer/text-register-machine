@@ -8,10 +8,12 @@ module Language.TRM.Programs (
   , copy
   , compare
   , succBB
+  , addBB
 ) where
 
 import Language.TRM.Base
 
+import Control.Applicative
 import Control.Monad
 
 import Prelude hiding (compare)
@@ -108,8 +110,14 @@ succBB r tmp = do
          (do snocOne  tmp ; move r tmp ; break)
   move tmp r
 
--- | Add the first two registers using primitive recursion
-addBB r1 r2 r3 r4 r5 r6 r7 = do
+-- | Add the first two argument registers using primitive
+-- recursion. The remaining registers are temporaries assumed to be
+-- empty.
+--
+-- > *Language.TRM.Programs> decodeBB <$> runL (addBB 1 2 [3..7]) [(1, encodeBB 100), (2, encodeBB 20)]
+-- > Just 120
+addBB :: Register -> Register -> [Register] -> LComp ()
+addBB r1 r2 [r3, r4, r5, r6, r7] = do
   recCase <- freshLabel
   -- initialize
   snocHash r3 >> move r1 r4
