@@ -5,7 +5,6 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 
 {-# OPTIONS_GHC -Wall #-}
-{-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 
 -- | An implementation of Lawrence S. Moss' @1\#@ language and Text
 -- Register Machine (<http://www.indiana.edu/~iulg/trm/>). 
@@ -114,7 +113,8 @@ instance Show Word where
   show = show . wordToString
 
 -- | Register identifiers.
-newtype Register = R Int deriving (Eq, Ord, Show, Enum, Real, Integral, Num)
+newtype Register = R Int 
+    deriving (Eq, Ord, Show, Enum, Real, Integral, Num)
 
 -- | Abstract syntax for the primitive @1#@ instructions.
 data Instruction = SnocOne  Register

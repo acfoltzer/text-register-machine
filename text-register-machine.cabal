@@ -11,6 +11,7 @@ Maintainer:          acfoltzer@gmail.com
 Category:            Language
 Build-type:          Simple
 Cabal-version:       >=1.8
+extra-source-files:  Language/TRM/Properties.hs
 
 source-repository head
   type:     git

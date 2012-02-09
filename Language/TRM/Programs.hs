@@ -1,7 +1,13 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+{-# OPTIONS_GHC -Wall #-}
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
+
 module Language.TRM.Programs (
     -- * 1# Examples
     succBB'
   , plusBB'
+  , compare'
     -- * 1#L Programs
   , clear
   , move
@@ -9,11 +15,15 @@ module Language.TRM.Programs (
   , compare
   , succBB
   , addBB
+  , multBB
+  , exptBB
+  , double
+  , unaryToBB
+  , bbToUnary
 ) where
 
 import Language.TRM.Base
 
-import Control.Applicative
 import Control.Monad
 
 import Prelude hiding (compare)
@@ -47,7 +57,7 @@ clear :: Register -- ^ 'Register' to clear.
 clear r = 
   do_ $ \continue break -> 
       cond r break continue continue
-
+                   
 move :: Register -- ^ Source 'Register'.
      -> Register -- ^ Destination 'Register'.
      -> LComp ()
@@ -78,8 +88,6 @@ compare :: Register -> Register -> LComp ()
 compare r1 r2 = do
   [true, false, clear1, clear2] <- replicateM 4 freshLabel
 
-  top <- freshLabelHere
-
   do_ $ \continue _ ->
     cond r1
          (cond r2 (goto true)   (goto clear2) (goto clear2))
@@ -97,12 +105,10 @@ compare r1 r2 = do
   snocOne r1
   label false
 
-
-
 succBB :: Register -- ^ 'Register' to increment.
-       -> Register -- ^ Temporary 'Register', assumed to be empty.
        -> LComp ()
-succBB r tmp = do
+succBB r = do
+  tmp <- freshReg
   do_ $ \continue break ->
     cond r
          (do snocOne  tmp ; break)
@@ -110,15 +116,14 @@ succBB r tmp = do
          (do snocOne  tmp ; move r tmp ; break)
   move tmp r
 
--- | Add the first two argument registers using primitive
--- recursion. The remaining registers are temporaries assumed to be
--- empty.
+-- | Add the two argument registers using primitive
+-- recursion, leaving the result in the first.
 --
--- > *Language.TRM.Programs> decodeBB <$> runL (addBB 1 2 [3..7]) [(1, encodeBB 100), (2, encodeBB 20)]
+-- > *Language.TRM.Programs> decodeBB <$> runL (addBB 1 2) [(1, encodeBB 100), (2, encodeBB 20)]
 -- > Just 120
 addBB :: Register -> Register -> LComp ()
 addBB r1 r2 = do
-  [r3, r4, r5, r6, r7] <- replicateM 5 freshReg
+  [r3, r4, r5, r6] <- replicateM 4 freshReg
   recCase <- freshLabel
   -- initialize
   snocHash r3 >> move r1 r4
@@ -130,15 +135,15 @@ addBB r1 r2 = do
     cond r5 (goto recCase) break (goto recCase)
     -- recursive case
     label recCase
-    succBB r4 r5
-    succBB r3 r5
+    succBB r4
+    succBB r3
     continue
   clear r1 >> clear r2 >> clear r3
   move r4 r1
 
 multBB :: Register -> Register -> LComp ()
 multBB r1 r2 = do
-  [r3, r4, r5, r6, r7, r8, r9, r10, r11] <- replicateM 9 freshReg
+  [r3, r4, r5, r6] <- replicateM 4 freshReg
   recCase <- freshLabel
   -- initialize
   snocHash r3 >> snocHash r4
@@ -154,15 +159,14 @@ multBB r1 r2 = do
     move r4 r6
     addBB r5 r6
     move r5 r4
-    succBB r3 r5
+    succBB r3
     continue
   clear r1 >> clear r2 >> clear r3
   move r4 r1    
 
 exptBB :: Register -> Register -> LComp ()
 exptBB r1 r2 = do
-  [r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15] 
-     <- replicateM 13 freshReg
+  [r3, r4, r5, r6] <- replicateM 4 freshReg
   recCase <- freshLabel
   -- initialize
   snocHash r3 >> snocOne r4
@@ -178,20 +182,20 @@ exptBB r1 r2 = do
     move r4 r6
     multBB r5 r6
     move r5 r4
-    succBB r3 r5
+    succBB r3
     continue
   clear r1 >> clear r2 >> clear r3
   move r4 r1
 
-unaryToBB :: Register -> Register -> Register -> LComp ()
-unaryToBB src acc tmp = do
+unaryToBB :: Register -> Register -> LComp ()
+unaryToBB src acc = do
   -- initialize with # in acc
   snocOne acc
   do_ $ \continue break -> do
     -- run succBB on acc as long as there are 1s in src
     cond src
          break
-         (do succBB acc tmp; continue)
+         (do succBB acc ; continue)
          break -- shouldn't be a # in src
   -- finally, move acc to src
   move acc src
@@ -201,7 +205,7 @@ double r1 r2 = do copy r1 r2 ; move r2 r1
 
 bbToUnary :: Register -> LComp ()
 bbToUnary src = do
-  [acc, pos, t1, t2] <- replicateM 4 freshReg
+  [acc, pos, t1] <- replicateM 3 freshReg
   -- initialize with 1 in acc, since unary rep. of 0 is 1
   snocOne acc
   -- initialize position with 1 for least-significant bit
@@ -215,3 +219,4 @@ bbToUnary src = do
          (do double pos t1 ; continue)
   clear pos
   move acc src
+
