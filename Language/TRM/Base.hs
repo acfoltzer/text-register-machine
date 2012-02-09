@@ -332,6 +332,8 @@ class LSymantics repr where
   snocHash   :: Register -> repr ()
   -- | Return a fresh 'Label' to be used in a call to 'label' or 'goto'.
   freshLabel :: repr Label
+  -- | Return a fresh 'Register' that has not been used so far in the program.
+  freshReg   :: repr Register
   -- | Place a 'Label' at the given point in the program. Note that a
   -- particular 'Label' may be used only once per program.
   label      :: Label -> repr ()
@@ -348,21 +350,25 @@ class LSymantics repr where
              -> repr ()
 
 -- | The default backend for 'LSymantics'.
-newtype LComp a = LC { unLC :: StateT (Int, Set Label) (Writer LProgram) a }
+newtype LComp a = LC { unLC :: StateT (Int, Set Label, Register) 
+                               (Writer LProgram) a }
     deriving ( Functor, Applicative, Monad, MonadFix
-             , MonadState (Int, Set Label), MonadWriter LProgram)
+             , MonadState (Int, Set Label, Register), MonadWriter LProgram)
 
 instance LSymantics LComp where
   snocOne    = tell . Vector.singleton . LSnocOne
   snocHash   = tell . Vector.singleton . LSnocHash
-  freshLabel = do (l, ls) <- get
-                  put (l+1, ls)
+  freshLabel = do (l, ls, r) <- get
+                  put (l+1, ls, r)
                   return l
-  label l    = do (l', ls) <- get
+  label l    = do (l', ls, r) <- get
                   case Set.member l ls of
                     True  -> error $ printf "duplicate label %s" l
-                    False -> do put (l', Set.insert l ls)
+                    False -> do put (l', Set.insert l ls, r)
                                 tell . Vector.singleton $ LLabel l
+  freshReg   = do (l, ls, r) <- get
+                  put (l, ls, r+1)
+                  return r
   goto       = tell . Vector.singleton . LGoto
   cond r bEmpty bOne bHash = do 
     [lEmpty, lOne, lHash] <- replicateM 3 freshLabel
@@ -377,16 +383,18 @@ instance LSymantics LComp where
 freshLabelHere :: (Monad repr, LSymantics repr) => repr Label
 freshLabelHere = do l <- freshLabel ; label l ; return l
 
--- | Compiles an 'LComp' program into an 'LProgram'.
-compileL :: LComp () -> LProgram
-compileL prog = execWriter (evalStateT (unLC prog) (0, Set.empty))
+-- | Compiles an 'LComp' program into an 'LProgram', with an initial
+-- fresh register.
+compileL :: Register -> LComp () -> LProgram
+compileL r prog = execWriter (evalStateT (unLC prog) (0, Set.empty, r))
 
 -- | Given an 'LComp' program and an initial register state, and then
 -- runs it in the given register state. May return 'Nothing' if the
 -- program does not halt cleanly, as with 'run'.
 runL :: LComp () -> [(Register, Word)] -> Maybe Word
 runL p rs = do 
-  let final = (run . fromLabeledProgram . compileL $ p) (Map.fromList rs)
+  let maxarg = 1 + (maximum . map fst $ rs)
+      final = (run . fromLabeledProgram . compileL maxarg $ p) (Map.fromList rs)
   checkState final
   Map.lookup 1 final
 
@@ -395,7 +403,9 @@ runL p rs = do
 -- program does not halt cleanly, as with 'run'.
 runL' :: LComp () -> [(Register, Word)] -> [(Register, Word)]
 runL' p rs = Map.toList final
-  where final = (run . fromLabeledProgram . compileL $ p) (Map.fromList rs)
+  where 
+    maxarg = 1 + (maximum . map fst $ rs)
+    final  = (run . fromLabeledProgram . compileL maxarg $ p) (Map.fromList rs)
 
 
 

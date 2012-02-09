@@ -60,9 +60,9 @@ move src dest =
 
 copy :: Register -- ^ Source 'Register'.
      -> Register -- ^ Destination 'Register'.
-     -> Register -- ^ Temporary 'Register'.
      -> LComp ()
-copy src dest tmp = do
+copy src dest = do
+  tmp <- freshReg
   do_ $ \continue break ->
     cond src
          break
@@ -116,15 +116,16 @@ succBB r tmp = do
 --
 -- > *Language.TRM.Programs> decodeBB <$> runL (addBB 1 2 [3..7]) [(1, encodeBB 100), (2, encodeBB 20)]
 -- > Just 120
-addBB :: Register -> Register -> [Register] -> LComp ()
-addBB r1 r2 [r3, r4, r5, r6, r7] = do
+addBB :: Register -> Register -> LComp ()
+addBB r1 r2 = do
+  [r3, r4, r5, r6, r7] <- replicateM 5 freshReg
   recCase <- freshLabel
   -- initialize
   snocHash r3 >> move r1 r4
   do_ $ \continue break -> do
     -- test
-    copy r2 r5 r6
-    copy r3 r6 r7
+    copy r2 r5
+    copy r3 r6
     compare r5 r6
     cond r5 (goto recCase) break (goto recCase)
     -- recursive case
@@ -134,6 +135,83 @@ addBB r1 r2 [r3, r4, r5, r6, r7] = do
     continue
   clear r1 >> clear r2 >> clear r3
   move r4 r1
-    
 
-  
+multBB :: Register -> Register -> LComp ()
+multBB r1 r2 = do
+  [r3, r4, r5, r6, r7, r8, r9, r10, r11] <- replicateM 9 freshReg
+  recCase <- freshLabel
+  -- initialize
+  snocHash r3 >> snocHash r4
+  do_ $ \continue break -> do
+    -- test
+    copy r2 r5
+    copy r3 r6
+    compare r5 r6
+    cond r5 (goto recCase) break (goto recCase)
+    -- recursive case
+    label recCase
+    copy r1 r5
+    move r4 r6
+    addBB r5 r6
+    move r5 r4
+    succBB r3 r5
+    continue
+  clear r1 >> clear r2 >> clear r3
+  move r4 r1    
+
+exptBB :: Register -> Register -> LComp ()
+exptBB r1 r2 = do
+  [r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15] 
+     <- replicateM 13 freshReg
+  recCase <- freshLabel
+  -- initialize
+  snocHash r3 >> snocOne r4
+  do_ $ \continue break -> do
+    -- test
+    copy r2 r5 
+    copy r3 r6 
+    compare r5 r6
+    cond r5 (goto recCase) break (goto recCase)
+    -- recursive case
+    label recCase
+    copy r1 r5 
+    move r4 r6
+    multBB r5 r6
+    move r5 r4
+    succBB r3 r5
+    continue
+  clear r1 >> clear r2 >> clear r3
+  move r4 r1
+
+unaryToBB :: Register -> Register -> Register -> LComp ()
+unaryToBB src acc tmp = do
+  -- initialize with # in acc
+  snocOne acc
+  do_ $ \continue break -> do
+    -- run succBB on acc as long as there are 1s in src
+    cond src
+         break
+         (do succBB acc tmp; continue)
+         break -- shouldn't be a # in src
+  -- finally, move acc to src
+  move acc src
+
+double :: Register -> Register -> LComp ()
+double r1 r2 = do copy r1 r2 ; move r2 r1
+
+bbToUnary :: Register -> LComp ()
+bbToUnary src = do
+  [acc, pos, t1, t2] <- replicateM 4 freshReg
+  -- initialize with 1 in acc, since unary rep. of 0 is 1
+  snocOne acc
+  -- initialize position with 1 for least-significant bit
+  snocOne pos
+  do_ $ \continue break -> do
+    cond src
+         break
+         -- if 1, copy pos to acc, double pos, continue
+         (do copy pos acc ; double pos t1 ; continue)
+         -- if #, double pos, continue
+         (do double pos t1 ; continue)
+  clear pos
+  move acc src
